@@ -26,24 +26,24 @@
       <div class="converter-card">
         <div class="currency-row" id="rowTop" dir="ltr">
           <button type="button" class="currency-select" id="selectTop" aria-haspopup="false">
-            <span class="flag-icon flag-ir" id="flagTop" aria-hidden="true"></span>
-            <span class="currency-code" id="codeTop">IRT</span>
+            <span class="flag-icon flag-us" id="flagTop" aria-hidden="true"></span>
+            <span class="currency-code" id="codeTop">USD</span>
             <span class="chevron" aria-hidden="true">
               <svg width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </span>
           </button>
-          <input type="text" inputmode="decimal" class="amount-input" id="inputTop" value="1,000,000" aria-label="مبلغ به تومان" />
+          <input type="text" inputmode="decimal" class="amount-input" id="inputTop" value="1" aria-label="مبلغ به دلار" />
         </div>
 
         <div class="currency-row" id="rowBottom" dir="ltr">
           <button type="button" class="currency-select" id="selectBottom" aria-haspopup="false">
-            <span class="flag-icon flag-us" id="flagBottom" aria-hidden="true"></span>
-            <span class="currency-code" id="codeBottom">USD</span>
+            <span class="flag-icon flag-ir" id="flagBottom" aria-hidden="true"></span>
+            <span class="currency-code" id="codeBottom">IRT</span>
             <span class="chevron" aria-hidden="true">
               <svg width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </span>
           </button>
-          <input type="text" inputmode="decimal" class="amount-input" id="inputBottom" value="…" aria-label="مبلغ به دلار" disabled />
+          <input type="text" inputmode="decimal" class="amount-input" id="inputBottom" value="…" aria-label="مبلغ به تومان" disabled />
         </div>
 
         <button type="button" class="swap-btn" id="swapBtn" aria-label="جابه‌جایی ارزها">
@@ -57,16 +57,16 @@
       <!-- کارت خلاصه و نرخ‌ها -->
       <div class="summary-card" dir="rtl">
         <p class="summary-headline">
-          هر <span id="headlineBase">1,000,000</span>
-          <span id="headlineBaseUnit">تومان</span> معادل
+          هر <span id="headlineBase">1</span>
+          <span id="headlineBaseUnit">دلار</span> معادل
           <span id="headlineQuote">…</span>
-          <span id="headlineQuoteUnit">دلار</span>
+          <span id="headlineQuoteUnit">تومان</span>
         </p>
 
         <div class="info-row two-col">
           <div class="info-item">
             <span class="info-label">ارزش به تومان:</span>
-            <span class="info-value" id="tomanValue">1.00 میلیون ت</span>
+            <span class="info-value" id="tomanValue">…</span>
           </div>
           <span class="info-divider" aria-hidden="true"></span>
           <div class="info-item">

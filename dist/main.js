@@ -53,16 +53,16 @@ const CURRENCY_NAMES = {
     IRT: "تومان",
     USD: "دلار",
 };
-/** مقدار پیش‌فرض ثابت تومان که همیشه مبنای محاسبه‌ی دلار پیش‌فرض است */
-const DEFAULT_IRT_AMOUNT = 1000000;
+/** مقدار پیش‌فرض ثابت دلار که همیشه مبنای محاسبه‌ی تومان پیش‌فرض است */
+const DEFAULT_USD_AMOUNT = 1;
 /** اگر دریافت نرخ واقعی با خطا مواجه شد، این عدد به‌عنوان جایگزین استفاده می‌شود */
 const FALLBACK_RATE = 234400;
 /** منبع رایگان و بدون نیاز به کلید برای نرخ آزاد دلار به تومان (Tomanify) */
 const RATE_API_URL = "https://raw.githubusercontent.com/rate-json/default/main/data.json";
 const state = {
-    topCurrency: "IRT",
+    topCurrency: "USD",
     tomanPerUsd: null,
-    amounts: { IRT: DEFAULT_IRT_AMOUNT, USD: 0 },
+    amounts: { IRT: 0, USD: DEFAULT_USD_AMOUNT },
 };
 const SUBSCRIPT_DIGITS = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
 function toSubscript(n) {
@@ -239,8 +239,8 @@ async function fetchLiveRate() {
 /** پس از مشخص‌شدن نرخ (واقعی یا جایگزین)، مقادیر اولیه و کل رابط کاربری را می‌سازد */
 function applyRate(rate, els) {
     state.tomanPerUsd = rate;
-    state.amounts.IRT = DEFAULT_IRT_AMOUNT;
-    state.amounts.USD = usdFromIrt(DEFAULT_IRT_AMOUNT);
+    state.amounts.USD = DEFAULT_USD_AMOUNT;
+    state.amounts.IRT = irtFromUsd(DEFAULT_USD_AMOUNT);
     els.inputBottom.disabled = false;
     els.swapBtn.disabled = false;
     renderAll(els);
