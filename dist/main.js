@@ -1,0 +1,293 @@
+"use strict";
+/**
+ * مبدل تومان و دلار
+ * ------------------------------------------------------------
+ * منطق کار (بازنویسی‌شده):
+ *  - دیگر فیلد دستی «نرخ هر دلار» وجود ندارد. به‌جای آن، در لحظه‌ی بارگذاری
+ *    صفحه، نرخ واقعیِ لحظه‌ای دلار به تومان از یک منبع عمومی و رایگان
+ *    (rate-json/Tomanify) دریافت و در همه‌ی محاسبات استفاده می‌شود.
+ *  - مقدار پیش‌فرض تومان همیشه ۱,۰۰۰,۰۰۰ است؛ مقدار دلار متناظرش از روی
+ *    همان نرخ واقعی محاسبه می‌شود (نه یک عدد ثابت و فرضی).
+ *  - اگر دریافت نرخ با خطا مواجه شود (قطعی شبکه، مسدود بودن دامنه و…)، از
+ *    یک نرخ پیش‌فرض محافظه‌کارانه استفاده می‌شود و این موضوع صریحاً به
+ *    کاربر اطلاع داده می‌شود.
+ *  - با تغییر مقدار در فیلد تومان یا دلار، مقدار دیگر بر اساس همین نرخِ
+ *    دریافت‌شده بازمحاسبه می‌شود؛ خودِ نرخ توسط کاربر قابل‌ویرایش نیست.
+ */
+const CURRENCIES = {
+    IRT: {
+        code: "IRT",
+        flagClass: "flag-ir",
+        buildFlagSvg: () => `
+      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="پرچم ایران">
+        <clipPath id="clipIR"><circle cx="12" cy="12" r="12"/></clipPath>
+        <g clip-path="url(#clipIR)">
+          <rect width="24" height="8" y="0" fill="#239f40"/>
+          <rect width="24" height="8" y="8" fill="#ffffff"/>
+          <rect width="24" height="8" y="16" fill="#da0000"/>
+        </g>
+      </svg>`,
+    },
+    USD: {
+        code: "USD",
+        flagClass: "flag-us",
+        buildFlagSvg: () => `
+      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="پرچم آمریکا">
+        <clipPath id="clipUS"><circle cx="12" cy="12" r="12"/></clipPath>
+        <g clip-path="url(#clipUS)">
+          <rect width="24" height="24" fill="#b22234"/>
+          <g fill="#ffffff">
+            <rect y="2" width="24" height="2"/>
+            <rect y="6" width="24" height="2"/>
+            <rect y="10" width="24" height="2"/>
+            <rect y="14" width="24" height="2"/>
+            <rect y="18" width="24" height="2"/>
+            <rect y="22" width="24" height="2"/>
+          </g>
+          <rect width="11" height="12" fill="#3c3b6e"/>
+        </g>
+      </svg>`,
+    },
+};
+const CURRENCY_NAMES = {
+    IRT: "تومان",
+    USD: "دلار",
+};
+/** مقدار پیش‌فرض ثابت تومان که همیشه مبنای محاسبه‌ی دلار پیش‌فرض است */
+const DEFAULT_IRT_AMOUNT = 1000000;
+/** اگر دریافت نرخ واقعی با خطا مواجه شد، این عدد به‌عنوان جایگزین استفاده می‌شود */
+const FALLBACK_RATE = 234400;
+/** منبع رایگان و بدون نیاز به کلید برای نرخ آزاد دلار به تومان (Tomanify) */
+const RATE_API_URL = "https://raw.githubusercontent.com/rate-json/default/main/data.json";
+const state = {
+    topCurrency: "IRT",
+    tomanPerUsd: null,
+    amounts: { IRT: DEFAULT_IRT_AMOUNT, USD: 0 },
+};
+const SUBSCRIPT_DIGITS = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
+function toSubscript(n) {
+    return String(n)
+        .split("")
+        .map((d) => { var _a; return (_a = SUBSCRIPT_DIGITS[Number(d)]) !== null && _a !== void 0 ? _a : d; })
+        .join("");
+}
+const PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
+const ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩";
+/**
+ * ارقام فارسی/عربی و جداکننده‌های اعشاری آن‌ها را به معادل انگلیسی تبدیل
+ * می‌کند. این تبدیل لازم است چون کیبورد بیشتر گوشی‌های ایرانی به‌صورت
+ * پیش‌فرض روی ارقام فارسی است و بدون این تبدیل، ورودی کاربر پاک می‌شد.
+ */
+function normalizeDigits(input) {
+    return input
+        .replace(/[۰-۹]/g, (d) => String(PERSIAN_DIGITS.indexOf(d)))
+        .replace(/[٠-٩]/g, (d) => String(ARABIC_DIGITS.indexOf(d)))
+        .replace(/٫/g, ".") // جداکننده‌ی اعشاری عربی/فارسی
+        .replace(/٬/g, ""); // جداکننده‌ی هزارگان عربی/فارسی
+}
+/** رشته‌ی عددی را از جداکننده‌ها و کاراکترهای غیرعددی پاک می‌کند */
+function parseAmount(raw) {
+    const normalized = normalizeDigits(raw);
+    const cleaned = normalized.replace(/[^\d.]/g, "");
+    const value = parseFloat(cleaned);
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+/** عدد را با جداکننده‌ی هزارگان نمایش می‌دهد (برای مبالغ معمولی) */
+function formatAmount(value, maxFractionDigits = 3) {
+    if (!Number.isFinite(value))
+        return "0";
+    return value.toLocaleString("en-US", { maximumFractionDigits: maxFractionDigits });
+}
+/**
+ * اعداد خیلی کوچک را به شکل فشرده نمایش می‌دهد، مثلاً
+ * 0.0000042667 → "0.0₅4267" (۵ صفر پس از ممیز، سپس رقم‌های معنادار)
+ */
+function formatCompactSmall(value, significantDigits = 4) {
+    var _a;
+    if (!Number.isFinite(value) || value <= 0)
+        return "0";
+    if (value >= 0.01)
+        return formatAmount(value, significantDigits);
+    const fixed = value.toFixed(12);
+    const decimals = (_a = fixed.split(".")[1]) !== null && _a !== void 0 ? _a : "";
+    let zeroCount = 0;
+    while (decimals[zeroCount] === "0")
+        zeroCount++;
+    const significant = decimals.slice(zeroCount, zeroCount + significantDigits).padEnd(significantDigits, "0");
+    return `0.0${toSubscript(zeroCount)}${significant}`;
+}
+function formatMillionsToman(value) {
+    const millions = value / 1000000;
+    return `${millions.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    })} میلیون ت`;
+}
+function getElements() {
+    const byId = (id) => {
+        const el = document.getElementById(id);
+        if (!el)
+            throw new Error(`Element #${id} not found`);
+        return el;
+    };
+    return {
+        rateStatus: byId("rateStatus"),
+        flagTop: byId("flagTop"),
+        flagBottom: byId("flagBottom"),
+        codeTop: byId("codeTop"),
+        codeBottom: byId("codeBottom"),
+        inputTop: byId("inputTop"),
+        inputBottom: byId("inputBottom"),
+        swapBtn: byId("swapBtn"),
+        headlineBase: byId("headlineBase"),
+        headlineBaseUnit: byId("headlineBaseUnit"),
+        headlineQuote: byId("headlineQuote"),
+        headlineQuoteUnit: byId("headlineQuoteUnit"),
+        tomanValue: byId("tomanValue"),
+        rateValue: byId("rateValue"),
+    };
+}
+function bottomCurrencyOf(top) {
+    return top === "IRT" ? "USD" : "IRT";
+}
+function usdFromIrt(irt) {
+    return state.tomanPerUsd && state.tomanPerUsd > 0 ? irt / state.tomanPerUsd : 0;
+}
+function irtFromUsd(usd) {
+    return state.tomanPerUsd ? usd * state.tomanPerUsd : 0;
+}
+function renderCurrencyRows(els) {
+    const top = CURRENCIES[state.topCurrency];
+    const bottom = CURRENCIES[bottomCurrencyOf(state.topCurrency)];
+    els.flagTop.innerHTML = top.buildFlagSvg();
+    els.flagTop.className = `flag-icon ${top.flagClass}`;
+    els.codeTop.textContent = top.code;
+    els.flagBottom.innerHTML = bottom.buildFlagSvg();
+    els.flagBottom.className = `flag-icon ${bottom.flagClass}`;
+    els.codeBottom.textContent = bottom.code;
+    els.inputTop.value = formatAmount(state.amounts[top.code]);
+    els.inputBottom.value = state.tomanPerUsd === null ? "…" : formatAmount(state.amounts[bottom.code]);
+    els.inputTop.setAttribute("aria-label", `مبلغ به ${CURRENCY_NAMES[top.code]}`);
+    els.inputBottom.setAttribute("aria-label", `مبلغ به ${CURRENCY_NAMES[bottom.code]}`);
+}
+function renderSummary(els) {
+    const topCode = state.topCurrency;
+    const bottomCode = bottomCurrencyOf(topCode);
+    els.headlineBase.textContent = formatAmount(state.amounts[topCode]);
+    els.headlineBaseUnit.textContent = CURRENCY_NAMES[topCode];
+    els.headlineQuote.textContent = formatAmount(state.amounts[bottomCode]);
+    els.headlineQuoteUnit.textContent = CURRENCY_NAMES[bottomCode];
+    els.tomanValue.textContent = formatMillionsToman(state.amounts.IRT);
+    if (state.tomanPerUsd === null) {
+        els.rateValue.textContent = "…";
+        return;
+    }
+    els.rateValue.textContent =
+        topCode === "IRT" ? formatCompactSmall(usdFromIrt(1)) : formatAmount(irtFromUsd(1), 0);
+}
+function renderAll(els) {
+    renderCurrencyRows(els);
+    renderSummary(els);
+}
+/** با تغییر مقدار در فیلد بالا یا پایین، مقدار متناظر از روی نرخ محاسبه می‌شود */
+function recalcFromAmount(source, els) {
+    if (state.tomanPerUsd === null)
+        return; // تا وقتی نرخ نرسیده، محاسبه‌ای انجام نمی‌شود
+    const topCode = state.topCurrency;
+    const bottomCode = bottomCurrencyOf(topCode);
+    if (source === "top") {
+        const raw = parseAmount(els.inputTop.value);
+        state.amounts[topCode] = raw;
+        state.amounts[bottomCode] = topCode === "IRT" ? usdFromIrt(raw) : irtFromUsd(raw);
+        els.inputBottom.value = formatAmount(state.amounts[bottomCode]);
+    }
+    else {
+        const raw = parseAmount(els.inputBottom.value);
+        state.amounts[bottomCode] = raw;
+        state.amounts[topCode] = bottomCode === "IRT" ? usdFromIrt(raw) : irtFromUsd(raw);
+        els.inputTop.value = formatAmount(state.amounts[topCode]);
+    }
+    renderSummary(els);
+}
+/**
+ * نرخ لحظه‌ای دلار به تومان را از یک منبع رایگان و بدون نیاز به کلید
+ * دریافت می‌کند. داده از rate-json/Tomanify (بازار آزاد ایران) خوانده
+ * می‌شود؛ در صورت خطا یا timeout، مقدار null برمی‌گرداند تا از نرخ
+ * پیش‌فرض استفاده شود.
+ */
+async function fetchLiveRate() {
+    var _a, _b;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+        const response = await fetch(RATE_API_URL, { signal: controller.signal });
+        if (!response.ok)
+            return null;
+        const data = (await response.json());
+        const usd = (_a = data.values) === null || _a === void 0 ? void 0 : _a.USD;
+        if (typeof usd !== "number" || !Number.isFinite(usd) || usd <= 0)
+            return null;
+        return { rate: usd, date: (_b = data.generated_by_tomanify_at) !== null && _b !== void 0 ? _b : null };
+    }
+    catch {
+        return null;
+    }
+    finally {
+        clearTimeout(timeout);
+    }
+}
+/** پس از مشخص‌شدن نرخ (واقعی یا جایگزین)، مقادیر اولیه و کل رابط کاربری را می‌سازد */
+function applyRate(rate, els) {
+    state.tomanPerUsd = rate;
+    state.amounts.IRT = DEFAULT_IRT_AMOUNT;
+    state.amounts.USD = usdFromIrt(DEFAULT_IRT_AMOUNT);
+    els.inputBottom.disabled = false;
+    els.swapBtn.disabled = false;
+    renderAll(els);
+}
+/** پیام وضعیت را با گره‌های متنی امن می‌سازد (بدون innerHTML، بدون ریسک تزریق) */
+function setStatusMessage(el, mainText, trailingText) {
+    el.textContent = "";
+    el.appendChild(document.createTextNode(mainText + (trailingText ? " " : "")));
+    if (trailingText) {
+        const bdi = document.createElement("bdi");
+        bdi.textContent = trailingText;
+        el.appendChild(bdi);
+    }
+}
+async function loadRate(els) {
+    const result = await fetchLiveRate();
+    if (result) {
+        applyRate(result.rate, els);
+        els.rateStatus.classList.remove("is-error");
+        setStatusMessage(els.rateStatus, "نرخ لحظه‌ای از Tomanify", result.date ? `· به‌روزرسانی: ${result.date}` : null);
+    }
+    else {
+        applyRate(FALLBACK_RATE, els);
+        els.rateStatus.classList.add("is-error");
+        setStatusMessage(els.rateStatus, "نرخ لحظه‌ای دریافت نشد؛ از مقدار پیش‌فرض", `(${formatAmount(FALLBACK_RATE, 0)} تومان) استفاده شد`);
+    }
+}
+function init() {
+    const els = getElements();
+    // تا رسیدن نرخ، فیلد دلار و دکمه‌ی سواپ غیرفعال هستند تا محاسبه‌ی نادرست
+    // نمایش داده نشود
+    renderCurrencyRows(els);
+    els.swapBtn.disabled = true;
+    els.inputTop.addEventListener("input", () => recalcFromAmount("top", els));
+    els.inputBottom.addEventListener("input", () => recalcFromAmount("bottom", els));
+    els.inputTop.addEventListener("blur", () => {
+        els.inputTop.value = formatAmount(state.amounts[state.topCurrency]);
+    });
+    els.inputBottom.addEventListener("blur", () => {
+        els.inputBottom.value = formatAmount(state.amounts[bottomCurrencyOf(state.topCurrency)]);
+    });
+    els.swapBtn.addEventListener("click", () => {
+        state.topCurrency = bottomCurrencyOf(state.topCurrency);
+        renderCurrencyRows(els);
+        renderSummary(els);
+    });
+    void loadRate(els);
+}
+document.addEventListener("DOMContentLoaded", init);
+//# sourceMappingURL=main.js.map

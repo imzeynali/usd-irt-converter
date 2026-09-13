@@ -1,0 +1,13 @@
+{
+  "name": "irt-usd-converter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "اپ ساده تبدیل تومان به دلار و بالعکس",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}
