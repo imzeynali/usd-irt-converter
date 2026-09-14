@@ -20,6 +20,12 @@
       <!-- وضعیت دریافت نرخ لحظه‌ای -->
       <div class="rate-status-card">
         <span id="rateStatus">در حال دریافت نرخ لحظه‌ای دلار…</span>
+        <button type="button" class="refresh-btn" id="refreshBtn" aria-label="دریافت دوباره‌ی نرخ" title="به‌روزرسانی نرخ">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.88" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M13.5 2.5v3.5H10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
       </div>
 
       <!-- کارت اصلی تبدیل: دو ردیف ارز + دکمه جابه‌جایی -->
@@ -54,6 +60,8 @@
         </button>
       </div>
 
+      <div class="limit-hint" id="limitHint" role="status" aria-live="polite"></div>
+
       <!-- کارت خلاصه و نرخ‌ها -->
       <div class="summary-card" dir="rtl">
         <p class="summary-headline">
@@ -65,7 +73,7 @@
 
         <div class="info-row two-col">
           <div class="info-item">
-            <span class="info-label">ارزش به تومان:</span>
+            <span class="info-label" id="tomanLabel">ارزش به تومان:</span>
             <span class="info-value" id="tomanValue">…</span>
           </div>
           <span class="info-divider" aria-hidden="true"></span>

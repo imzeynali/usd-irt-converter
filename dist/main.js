@@ -1,18 +1,19 @@
 "use strict";
 /**
- * مبدل تومان و دلار
+ * مبدل تومان/ریال و دلار
  * ------------------------------------------------------------
- * منطق کار (بازنویسی‌شده):
- *  - دیگر فیلد دستی «نرخ هر دلار» وجود ندارد. به‌جای آن، در لحظه‌ی بارگذاری
- *    صفحه، نرخ واقعیِ لحظه‌ای دلار به تومان از یک منبع عمومی و رایگان
- *    (rate-json/Tomanify) دریافت و در همه‌ی محاسبات استفاده می‌شود.
- *  - مقدار پیش‌فرض تومان همیشه ۱,۰۰۰,۰۰۰ است؛ مقدار دلار متناظرش از روی
- *    همان نرخ واقعی محاسبه می‌شود (نه یک عدد ثابت و فرضی).
- *  - اگر دریافت نرخ با خطا مواجه شود (قطعی شبکه، مسدود بودن دامنه و…)، از
- *    یک نرخ پیش‌فرض محافظه‌کارانه استفاده می‌شود و این موضوع صریحاً به
- *    کاربر اطلاع داده می‌شود.
- *  - با تغییر مقدار در فیلد تومان یا دلار، مقدار دیگر بر اساس همین نرخِ
- *    دریافت‌شده بازمحاسبه می‌شود؛ خودِ نرخ توسط کاربر قابل‌ویرایش نیست.
+ * منطق کار:
+ *  - در لحظه‌ی بارگذاری صفحه، نرخ واقعیِ لحظه‌ای دلار به تومان از چند منبع
+ *    عمومی و رایگان (به‌ترتیب اولویت) دریافت می‌شود. اگر منبع اول جواب
+ *    نداد یا داده‌ی نامعتبر برگرداند، به‌صورت خودکار سراغ منبع بعدی می‌رود؛
+ *    فقط اگر همه‌ی منابع شکست بخورند از یک نرخ تقریبیِ آفلاین استفاده
+ *    می‌شود و این موضوع صریحاً (با رنگ قرمز) به کاربر اطلاع داده می‌شود.
+ *  - کاربر می‌تواند واحد نمایش پول ایران را بین «تومان» و «ریال» رسمی
+ *    جابه‌جا کند (با کلیک روی ردیف تومان/ریال). عدد پایه همیشه به تومان در
+ *    state نگه‌داری می‌شود؛ ریال فقط ضربی از همان مقدار در نمایش است.
+ *  - برای جلوگیری از سرریز شدن رقم‌ها از صفحه، سقفی برای مبلغ دلار/تومان
+ *    ورودی در نظر گرفته شده و در صورت عبور از آن، مقدار محدود و به کاربر
+ *    اطلاع داده می‌شود.
  */
 const CURRENCIES = {
     IRT: {
@@ -49,21 +50,41 @@ const CURRENCIES = {
       </svg>`,
     },
 };
-const CURRENCY_NAMES = {
-    IRT: "تومان",
-    USD: "دلار",
-};
 /** مقدار پیش‌فرض ثابت دلار که همیشه مبنای محاسبه‌ی تومان پیش‌فرض است */
 const DEFAULT_USD_AMOUNT = 1;
-/** اگر دریافت نرخ واقعی با خطا مواجه شد، این عدد به‌عنوان جایگزین استفاده می‌شود */
-const FALLBACK_RATE = 234400;
-/** منبع رایگان و بدون نیاز به کلید برای نرخ آزاد دلار به تومان (Tomanify) */
-const RATE_API_URL = "https://raw.githubusercontent.com/rate-json/default/main/data.json";
+/** اگر همه‌ی منابع نرخ با خطا مواجه شدند، این عدد (تومان) به‌عنوان جایگزین استفاده می‌شود */
+const FALLBACK_RATE = 233700;
+/**
+ * حداکثر مقداری که کاربر مجاز است در فیلد دلار وارد کند. جلوی سرریز شدن
+ * رقم‌های تومان/ریالِ معادل از کادرها را می‌گیرد (مثلاً وارد کردن اعداد
+ * نجومی مثل صد میلیارد دلار).
+ */
+const MAX_USD_AMOUNT = 1000000;
 const state = {
     topCurrency: "USD",
     tomanPerUsd: null,
     amounts: { IRT: 0, USD: DEFAULT_USD_AMOUNT },
+    rialMode: false,
 };
+/** واحد نمایشی جاریِ سمت ایران به‌صورت ضریب (تومان=۱، ریال=۱۰) */
+function irtDisplayMultiplier() {
+    return state.rialMode ? 10 : 1;
+}
+function irtUnitName() {
+    return state.rialMode ? "ریال" : "تومان";
+}
+function irtUnitCode() {
+    return state.rialMode ? "IRR" : "IRT";
+}
+function currencyName(code) {
+    return code === "IRT" ? irtUnitName() : "دلار";
+}
+/** حداکثر مقدار مجاز تومان (پایه‌ی داخلی)، برگرفته از سقف دلار و نرخ فعلی */
+function maxIrtToman() {
+    if (!state.tomanPerUsd)
+        return Number.POSITIVE_INFINITY;
+    return MAX_USD_AMOUNT * state.tomanPerUsd;
+}
 const SUBSCRIPT_DIGITS = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
 function toSubscript(n) {
     return String(n)
@@ -116,12 +137,19 @@ function formatCompactSmall(value, significantDigits = 4) {
     const significant = decimals.slice(zeroCount, zeroCount + significantDigits).padEnd(significantDigits, "0");
     return `0.0${toSubscript(zeroCount)}${significant}`;
 }
-function formatMillionsToman(value) {
+/**
+ * مبلغ بزرگ تومان/ریال را به شکل فشرده («X میلیون» یا «X میلیارد») نمایش
+ * می‌دهد. ورودی همیشه به «تومان» است؛ ضرب برای ریال همین‌جا انجام می‌شود.
+ */
+function formatCompactIrt(tomanValue) {
+    const value = tomanValue * irtDisplayMultiplier();
+    const unit = irtUnitName();
+    if (value >= 1000000000) {
+        const billions = value / 1000000000;
+        return `${billions.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} میلیارد ${unit}`;
+    }
     const millions = value / 1000000;
-    return `${millions.toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-    })} میلیون ت`;
+    return `${millions.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} میلیون ${unit}`;
 }
 function getElements() {
     const byId = (id) => {
@@ -132,10 +160,14 @@ function getElements() {
     };
     return {
         rateStatus: byId("rateStatus"),
+        refreshBtn: byId("refreshBtn"),
+        limitHint: byId("limitHint"),
         flagTop: byId("flagTop"),
         flagBottom: byId("flagBottom"),
         codeTop: byId("codeTop"),
         codeBottom: byId("codeBottom"),
+        selectTop: byId("selectTop"),
+        selectBottom: byId("selectBottom"),
         inputTop: byId("inputTop"),
         inputBottom: byId("inputBottom"),
         swapBtn: byId("swapBtn"),
@@ -144,46 +176,71 @@ function getElements() {
         headlineQuote: byId("headlineQuote"),
         headlineQuoteUnit: byId("headlineQuoteUnit"),
         tomanValue: byId("tomanValue"),
+        tomanLabel: byId("tomanLabel"),
         rateValue: byId("rateValue"),
     };
 }
 function bottomCurrencyOf(top) {
     return top === "IRT" ? "USD" : "IRT";
 }
-function usdFromIrt(irt) {
-    return state.tomanPerUsd && state.tomanPerUsd > 0 ? irt / state.tomanPerUsd : 0;
+function usdFromIrt(irtToman) {
+    return state.tomanPerUsd && state.tomanPerUsd > 0 ? irtToman / state.tomanPerUsd : 0;
 }
 function irtFromUsd(usd) {
     return state.tomanPerUsd ? usd * state.tomanPerUsd : 0;
+}
+/** مقدار داخلی (همیشه تومان برای IRT) را برای نمایش در فیلد آماده می‌کند */
+function displayValueOf(code) {
+    return code === "IRT" ? state.amounts.IRT * irtDisplayMultiplier() : state.amounts.USD;
+}
+let limitHintTimer;
+function showLimitHint(els, message) {
+    els.limitHint.textContent = message;
+    els.limitHint.classList.add("is-visible");
+    if (limitHintTimer)
+        window.clearTimeout(limitHintTimer);
+    limitHintTimer = window.setTimeout(() => {
+        els.limitHint.classList.remove("is-visible");
+    }, 3500);
 }
 function renderCurrencyRows(els) {
     const top = CURRENCIES[state.topCurrency];
     const bottom = CURRENCIES[bottomCurrencyOf(state.topCurrency)];
     els.flagTop.innerHTML = top.buildFlagSvg();
     els.flagTop.className = `flag-icon ${top.flagClass}`;
-    els.codeTop.textContent = top.code;
+    els.codeTop.textContent = top.code === "IRT" ? irtUnitCode() : top.code;
     els.flagBottom.innerHTML = bottom.buildFlagSvg();
     els.flagBottom.className = `flag-icon ${bottom.flagClass}`;
-    els.codeBottom.textContent = bottom.code;
-    els.inputTop.value = formatAmount(state.amounts[top.code]);
-    els.inputBottom.value = state.tomanPerUsd === null ? "…" : formatAmount(state.amounts[bottom.code]);
-    els.inputTop.setAttribute("aria-label", `مبلغ به ${CURRENCY_NAMES[top.code]}`);
-    els.inputBottom.setAttribute("aria-label", `مبلغ به ${CURRENCY_NAMES[bottom.code]}`);
+    els.codeBottom.textContent = bottom.code === "IRT" ? irtUnitCode() : bottom.code;
+    // فقط ردیف تومان/ریال قابل‌کلیک است (برای سوییچ واحد نمایش)
+    const toggleTitle = `تغییر واحد به ${state.rialMode ? "تومان" : "ریال"}`;
+    els.selectTop.classList.toggle("is-toggleable", top.code === "IRT");
+    els.selectTop.setAttribute("aria-haspopup", top.code === "IRT" ? "true" : "false");
+    els.selectTop.title = top.code === "IRT" ? toggleTitle : "";
+    els.selectBottom.classList.toggle("is-toggleable", bottom.code === "IRT");
+    els.selectBottom.setAttribute("aria-haspopup", bottom.code === "IRT" ? "true" : "false");
+    els.selectBottom.title = bottom.code === "IRT" ? toggleTitle : "";
+    els.inputTop.value = formatAmount(displayValueOf(top.code));
+    els.inputBottom.value = state.tomanPerUsd === null ? "…" : formatAmount(displayValueOf(bottom.code));
+    els.inputTop.setAttribute("aria-label", `مبلغ به ${currencyName(top.code)}`);
+    els.inputBottom.setAttribute("aria-label", `مبلغ به ${currencyName(bottom.code)}`);
 }
 function renderSummary(els) {
     const topCode = state.topCurrency;
     const bottomCode = bottomCurrencyOf(topCode);
-    els.headlineBase.textContent = formatAmount(state.amounts[topCode]);
-    els.headlineBaseUnit.textContent = CURRENCY_NAMES[topCode];
-    els.headlineQuote.textContent = formatAmount(state.amounts[bottomCode]);
-    els.headlineQuoteUnit.textContent = CURRENCY_NAMES[bottomCode];
-    els.tomanValue.textContent = formatMillionsToman(state.amounts.IRT);
+    els.headlineBase.textContent = formatAmount(displayValueOf(topCode));
+    els.headlineBaseUnit.textContent = currencyName(topCode);
+    els.headlineQuote.textContent = formatAmount(displayValueOf(bottomCode));
+    els.headlineQuoteUnit.textContent = currencyName(bottomCode);
+    els.tomanValue.textContent = formatCompactIrt(state.amounts.IRT);
+    els.tomanLabel.textContent = `ارزش به ${irtUnitName()}:`;
     if (state.tomanPerUsd === null) {
         els.rateValue.textContent = "…";
         return;
     }
+    const m = irtDisplayMultiplier();
     els.rateValue.textContent =
-        topCode === "IRT" ? formatCompactSmall(usdFromIrt(1)) : formatAmount(irtFromUsd(1), 0);
+        topCode === "IRT" ? formatCompactSmall(usdFromIrt(1 / m)) : formatAmount(irtFromUsd(1) * m, 0);
 }
 function renderAll(els) {
     renderCurrencyRows(els);
@@ -195,39 +252,63 @@ function recalcFromAmount(source, els) {
         return; // تا وقتی نرخ نرسیده، محاسبه‌ای انجام نمی‌شود
     const topCode = state.topCurrency;
     const bottomCode = bottomCurrencyOf(topCode);
-    if (source === "top") {
-        const raw = parseAmount(els.inputTop.value);
-        state.amounts[topCode] = raw;
-        state.amounts[bottomCode] = topCode === "IRT" ? usdFromIrt(raw) : irtFromUsd(raw);
-        els.inputBottom.value = formatAmount(state.amounts[bottomCode]);
+    const activeCode = source === "top" ? topCode : bottomCode;
+    const activeInput = source === "top" ? els.inputTop : els.inputBottom;
+    const otherCode = source === "top" ? bottomCode : topCode;
+    const otherInput = source === "top" ? els.inputBottom : els.inputTop;
+    const rawDisplay = parseAmount(activeInput.value);
+    let clamped = false;
+    if (activeCode === "USD") {
+        let usd = rawDisplay;
+        if (usd > MAX_USD_AMOUNT) {
+            usd = MAX_USD_AMOUNT;
+            clamped = true;
+        }
+        state.amounts.USD = usd;
+        state.amounts.IRT = irtFromUsd(usd);
     }
     else {
-        const raw = parseAmount(els.inputBottom.value);
-        state.amounts[bottomCode] = raw;
-        state.amounts[topCode] = bottomCode === "IRT" ? usdFromIrt(raw) : irtFromUsd(raw);
-        els.inputTop.value = formatAmount(state.amounts[topCode]);
+        // مقدار نمایشی (که ممکن است ریال باشد) را به «تومان» پایه تبدیل می‌کنیم
+        let toman = rawDisplay / irtDisplayMultiplier();
+        const cap = maxIrtToman();
+        if (toman > cap) {
+            toman = cap;
+            clamped = true;
+        }
+        state.amounts.IRT = toman;
+        state.amounts.USD = usdFromIrt(toman);
     }
+    if (clamped) {
+        activeInput.value = formatAmount(displayValueOf(activeCode));
+        showLimitHint(els, activeCode === "USD"
+            ? `حداکثر مقدار مجاز ${formatAmount(MAX_USD_AMOUNT, 0)} دلار است.`
+            : `مقدار وارد شده خیلی بزرگ است؛ به بیشترین حد مجاز (معادل ${formatAmount(MAX_USD_AMOUNT, 0)} دلار) محدود شد.`);
+    }
+    otherInput.value = formatAmount(displayValueOf(otherCode));
     renderSummary(els);
 }
-/**
- * نرخ لحظه‌ای دلار به تومان را از یک منبع رایگان و بدون نیاز به کلید
- * دریافت می‌کند. داده از rate-json/Tomanify (بازار آزاد ایران) خوانده
- * می‌شود؛ در صورت خطا یا timeout، مقدار null برمی‌گرداند تا از نرخ
- * پیش‌فرض استفاده شود.
- */
-async function fetchLiveRate() {
+/** رشته‌ی تاریخ گرگوری (میلادی) با صفر ابتدایی، مثلاً «2026/09/13» */
+function gregorianDateString(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}/${m}/${d}`;
+}
+/** منبع اول: rate-json/Tomanify (بازار آزاد ایران، بدون نیاز به کلید) */
+async function fetchFromTomanify() {
     var _a, _b;
+    const url = "https://raw.githubusercontent.com/rate-json/default/main/data.json";
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-        const response = await fetch(RATE_API_URL, { signal: controller.signal });
+        const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
         if (!response.ok)
             return null;
         const data = (await response.json());
         const usd = (_a = data.values) === null || _a === void 0 ? void 0 : _a.USD;
         if (typeof usd !== "number" || !Number.isFinite(usd) || usd <= 0)
             return null;
-        return { rate: usd, date: (_b = data.generated_by_tomanify_at) !== null && _b !== void 0 ? _b : null };
+        return { rate: usd, date: (_b = data.generated_by_tomanify_at) !== null && _b !== void 0 ? _b : null, sourceLabel: null };
     }
     catch {
         return null;
@@ -236,6 +317,45 @@ async function fetchLiveRate() {
         clearTimeout(timeout);
     }
 }
+/**
+ * منبع دوم (پشتیبان): آرشیو نرخ ریال ایران (برگرفته از bonbast.com، به‌روزشونده
+ * روزانه با GitHub Actions). امروز معمولاً تا فردا صبح منتشر نمی‌شود، بنابراین
+ * چند روز اخیر را هم امتحان می‌کنیم تا جدیدترین روزِ موجود پیدا شود.
+ */
+async function fetchFromRialArchive() {
+    var _a;
+    const today = new Date();
+    for (let offset = 0; offset < 4; offset++) {
+        const day = new Date(today);
+        day.setDate(day.getDate() - offset);
+        const dateStr = gregorianDateString(day);
+        const url = `https://raw.githubusercontent.com/SamadiPour/rial-exchange-rates-archive/main/gregorian/${dateStr}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        try {
+            const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
+            if (!response.ok)
+                continue;
+            const data = (await response.json());
+            const sell = (_a = data.usd) === null || _a === void 0 ? void 0 : _a.sell;
+            if (typeof sell !== "number" || !Number.isFinite(sell) || sell <= 0)
+                continue;
+            return { rate: sell, date: dateStr, sourceLabel: "منبع پشتیبان" };
+        }
+        catch {
+            continue;
+        }
+        finally {
+            clearTimeout(timeout);
+        }
+    }
+    return null;
+}
+/**
+ * منابع نرخ آزاد دلار به تومان، به‌ترتیب اولویت. هرکدام شکست بخورد
+ * (خطای شبکه، timeout، پاسخ نامعتبر) به‌صورت خودکار سراغ منبع بعدی می‌رویم.
+ */
+const RATE_SOURCES = [fetchFromTomanify, fetchFromRialArchive];
 /** پس از مشخص‌شدن نرخ (واقعی یا جایگزین)، مقادیر اولیه و کل رابط کاربری را می‌سازد */
 function applyRate(rate, els) {
     state.tomanPerUsd = rate;
@@ -281,10 +401,18 @@ function gregorianToJalali(gy, gm, gd) {
     const jd = 1 + (days < 186 ? days % 31 : (days - 186) % 30);
     return [jy, jm, jd];
 }
-/** تاریخ امروز را به‌صورت «۲۳ شهریور ۱۴۰۵» برمی‌گرداند */
-function formatTodayJalali() {
-    const now = new Date();
-    const [jy, jm, jd] = gregorianToJalali(now.getFullYear(), now.getMonth() + 1, now.getDate());
+/** رشته‌ی تاریخ (میلادی «YYYY/MM/DD» یا هر رشته‌ی دیگر) را به «۲۳ شهریور ۱۴۰۵» تبدیل می‌کند */
+function formatJalaliFromDateInput(dateStr) {
+    let d = new Date();
+    if (dateStr) {
+        const parts = dateStr.split(/[/\-T]/).map((p) => parseInt(p, 10));
+        if (parts.length >= 3 && parts.every((p) => Number.isFinite(p))) {
+            const candidate = new Date(parts[0], parts[1] - 1, parts[2]);
+            if (!Number.isNaN(candidate.getTime()))
+                d = candidate;
+        }
+    }
+    const [jy, jm, jd] = gregorianToJalali(d.getFullYear(), d.getMonth() + 1, d.getDate());
     return `${jd} ${JALALI_MONTH_NAMES[jm - 1]} ${jy}`;
 }
 /** پیام وضعیت را با گره‌های متنی امن می‌سازد (بدون innerHTML، بدون ریسک تزریق) */
@@ -297,19 +425,36 @@ function setStatusMessage(el, mainText, trailingText) {
         el.appendChild(bdi);
     }
 }
+/** به‌ترتیب منابع تعریف‌شده را امتحان می‌کند تا یکی نتیجه‌ی معتبر بدهد */
+async function fetchLiveRate() {
+    for (const source of RATE_SOURCES) {
+        const result = await source();
+        if (result)
+            return result;
+    }
+    return null;
+}
 async function loadRate(els) {
+    els.refreshBtn.disabled = true;
+    setStatusMessage(els.rateStatus, "در حال دریافت نرخ لحظه‌ای دلار…", null);
+    els.rateStatus.classList.remove("is-error");
     const result = await fetchLiveRate();
-    const todayJalali = formatTodayJalali();
     if (result) {
         applyRate(result.rate, els);
         els.rateStatus.classList.remove("is-error");
-        setStatusMessage(els.rateStatus, "به‌روزرسانی:", todayJalali);
+        const dateLabel = formatJalaliFromDateInput(result.date);
+        setStatusMessage(els.rateStatus, "به‌روزرسانی:", result.sourceLabel ? `${dateLabel} (${result.sourceLabel})` : dateLabel);
     }
     else {
         applyRate(FALLBACK_RATE, els);
         els.rateStatus.classList.add("is-error");
-        setStatusMessage(els.rateStatus, "نرخ لحظه‌ای دریافت نشد؛ از مقدار پیش‌فرض", `(${formatAmount(FALLBACK_RATE, 0)} تومان) استفاده شد`);
+        setStatusMessage(els.rateStatus, "نرخ لحظه‌ای دریافت نشد؛ از مقدار تقریبی", `(${formatAmount(FALLBACK_RATE, 0)} تومان) استفاده شد`);
     }
+    els.refreshBtn.disabled = false;
+}
+function toggleRialMode(els) {
+    state.rialMode = !state.rialMode;
+    renderAll(els);
 }
 function init() {
     const els = getElements();
@@ -317,18 +462,31 @@ function init() {
     // نمایش داده نشود
     renderCurrencyRows(els);
     els.swapBtn.disabled = true;
+    els.inputTop.setAttribute("maxlength", "16");
+    els.inputBottom.setAttribute("maxlength", "20");
     els.inputTop.addEventListener("input", () => recalcFromAmount("top", els));
     els.inputBottom.addEventListener("input", () => recalcFromAmount("bottom", els));
     els.inputTop.addEventListener("blur", () => {
-        els.inputTop.value = formatAmount(state.amounts[state.topCurrency]);
+        els.inputTop.value = formatAmount(displayValueOf(state.topCurrency));
     });
     els.inputBottom.addEventListener("blur", () => {
-        els.inputBottom.value = formatAmount(state.amounts[bottomCurrencyOf(state.topCurrency)]);
+        els.inputBottom.value = formatAmount(displayValueOf(bottomCurrencyOf(state.topCurrency)));
     });
     els.swapBtn.addEventListener("click", () => {
         state.topCurrency = bottomCurrencyOf(state.topCurrency);
         renderCurrencyRows(els);
         renderSummary(els);
+    });
+    els.selectTop.addEventListener("click", () => {
+        if (state.topCurrency === "IRT")
+            toggleRialMode(els);
+    });
+    els.selectBottom.addEventListener("click", () => {
+        if (bottomCurrencyOf(state.topCurrency) === "IRT")
+            toggleRialMode(els);
+    });
+    els.refreshBtn.addEventListener("click", () => {
+        void loadRate(els);
     });
     void loadRate(els);
 }
