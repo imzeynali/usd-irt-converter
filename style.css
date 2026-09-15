@@ -323,6 +323,10 @@ body {
   min-width: 0;
 }
 
+.info-item-centered {
+  justify-content: center;
+}
+
 .two-col .info-item:last-child {
   justify-content: flex-start;
 }

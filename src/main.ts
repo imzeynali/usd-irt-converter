@@ -174,23 +174,6 @@ function formatCompactSmall(value: number, significantDigits = 4): string {
   return `0.0${toSubscript(zeroCount)}${significant}`;
 }
 
-/**
- * مبلغ بزرگ تومان/ریال را به شکل فشرده («X میلیون» یا «X میلیارد») نمایش
- * می‌دهد. ورودی همیشه به «تومان» است؛ ضرب برای ریال همین‌جا انجام می‌شود.
- */
-function formatCompactIrt(tomanValue: number): string {
-  const value = tomanValue * irtDisplayMultiplier();
-  const unit = irtUnitName();
-
-  if (value >= 1_000_000_000) {
-    const billions = value / 1_000_000_000;
-    return `${billions.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} میلیارد ${unit}`;
-  }
-
-  const millions = value / 1_000_000;
-  return `${millions.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} میلیون ${unit}`;
-}
-
 interface Elements {
   rateStatus: HTMLElement;
   refreshBtn: HTMLButtonElement;
@@ -208,8 +191,6 @@ interface Elements {
   headlineBaseUnit: HTMLElement;
   headlineQuote: HTMLElement;
   headlineQuoteUnit: HTMLElement;
-  tomanValue: HTMLElement;
-  tomanLabel: HTMLElement;
   rateValue: HTMLElement;
 }
 
@@ -237,8 +218,6 @@ function getElements(): Elements {
     headlineBaseUnit: byId("headlineBaseUnit"),
     headlineQuote: byId("headlineQuote"),
     headlineQuoteUnit: byId("headlineQuoteUnit"),
-    tomanValue: byId("tomanValue"),
-    tomanLabel: byId("tomanLabel"),
     rateValue: byId("rateValue"),
   };
 }
@@ -307,9 +286,6 @@ function renderSummary(els: Elements): void {
   els.headlineBaseUnit.textContent = currencyName(topCode);
   els.headlineQuote.textContent = formatAmount(displayValueOf(bottomCode));
   els.headlineQuoteUnit.textContent = currencyName(bottomCode);
-
-  els.tomanValue.textContent = formatCompactIrt(state.amounts.IRT);
-  els.tomanLabel.textContent = `ارزش به ${irtUnitName()}:`;
 
   if (state.tomanPerUsd === null) {
     els.rateValue.textContent = "…";
@@ -382,7 +358,36 @@ function gregorianDateString(date: Date): string {
   return `${y}/${m}/${d}`;
 }
 
-/** منبع اول: rate-json/Tomanify (بازار آزاد ایران، بدون نیاز به کلید) */
+/**
+ * منبع اول (اولویت اصلی): آخرین معامله‌ی جفت‌ارز USDT/IRT در صرافی تبدیل
+ * (tabdeal.org، همان صفحه‌ی convert/usd-irr). چون تتر (USDT) عملاً معادل
+ * دلار است، نرخش نزدیک‌ترین و لحظه‌ای‌ترین نماینده‌ی نرخ آزاد دلار به
+ * تومان است. اندپوینت عمومی و بدون نیاز به کلید است.
+ */
+async function fetchFromTabdeal(): Promise<RateApiResult | null> {
+  const url = "https://api1.tabdeal.org/r/api/v1/trades?symbol=USDTIRT&limit=1";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as Array<{ price?: string; time?: number }>;
+    const latest = Array.isArray(data) ? data[0] : null;
+    const price = latest?.price ? Number(latest.price) : NaN;
+    if (!Number.isFinite(price) || price <= 0) return null;
+
+    const date = latest?.time ? new Date(latest.time).toISOString() : null;
+    return { rate: price, date, sourceLabel: null };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** منبع دوم: rate-json/Tomanify (بازار آزاد ایران، بدون نیاز به کلید) */
 async function fetchFromTomanify(): Promise<RateApiResult | null> {
   const url = "https://raw.githubusercontent.com/rate-json/default/main/data.json";
   const controller = new AbortController();
@@ -405,7 +410,7 @@ async function fetchFromTomanify(): Promise<RateApiResult | null> {
 }
 
 /**
- * منبع دوم (پشتیبان): آرشیو نرخ ریال ایران (برگرفته از bonbast.com، به‌روزشونده
+ * منبع سوم (پشتیبان نهایی): آرشیو نرخ ریال ایران (برگرفته از bonbast.com، به‌روزشونده
  * روزانه با GitHub Actions). امروز معمولاً تا فردا صبح منتشر نمی‌شود، بنابراین
  * چند روز اخیر را هم امتحان می‌کنیم تا جدیدترین روزِ موجود پیدا شود.
  */
@@ -444,7 +449,11 @@ async function fetchFromRialArchive(): Promise<RateApiResult | null> {
  * منابع نرخ آزاد دلار به تومان، به‌ترتیب اولویت. هرکدام شکست بخورد
  * (خطای شبکه، timeout، پاسخ نامعتبر) به‌صورت خودکار سراغ منبع بعدی می‌رویم.
  */
-const RATE_SOURCES: Array<() => Promise<RateApiResult | null>> = [fetchFromTomanify, fetchFromRialArchive];
+const RATE_SOURCES: Array<() => Promise<RateApiResult | null>> = [
+  fetchFromTabdeal,
+  fetchFromTomanify,
+  fetchFromRialArchive,
+];
 
 /** پس از مشخص‌شدن نرخ (واقعی یا جایگزین)، مقادیر اولیه و کل رابط کاربری را می‌سازد */
 function applyRate(rate: number, els: Elements): void {
@@ -455,61 +464,6 @@ function applyRate(rate: number, els: Elements): void {
   els.inputBottom.disabled = false;
   els.swapBtn.disabled = false;
   renderAll(els);
-}
-
-const JALALI_MONTH_NAMES = [
-  "فروردین",
-  "اردیبهشت",
-  "خرداد",
-  "تیر",
-  "مرداد",
-  "شهریور",
-  "مهر",
-  "آبان",
-  "آذر",
-  "دی",
-  "بهمن",
-  "اسفند",
-];
-
-/**
- * تاریخ میلادی را به جلالی (شمسی) تبدیل می‌کند. الگوریتم استاندارد و رایج
- * تبدیل تقویم (jalaali-js) است، بدون نیاز به هیچ کتابخانه‌ی بیرونی.
- */
-function gregorianToJalali(gy: number, gm: number, gd: number): [number, number, number] {
-  const g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-  const div = (a: number, b: number) => Math.floor(a / b);
-
-  let jy = gy <= 1600 ? 0 : 979;
-  gy -= gy <= 1600 ? 621 : 1600;
-  const gy2 = gm > 2 ? gy + 1 : gy;
-  let days = 365 * gy + div(gy2 + 3, 4) - div(gy2 + 99, 100) + div(gy2 + 399, 400) - 80 + gd + g_d_m[gm - 1];
-
-  jy += 33 * div(days, 12053);
-  days %= 12053;
-  jy += 4 * div(days, 1461);
-  days %= 1461;
-  jy += div(days - 1, 365);
-  if (days > 365) days = (days - 1) % 365;
-
-  const jm = days < 186 ? 1 + div(days, 31) : 7 + div(days - 186, 30);
-  const jd = 1 + (days < 186 ? days % 31 : (days - 186) % 30);
-
-  return [jy, jm, jd];
-}
-
-/** رشته‌ی تاریخ (میلادی «YYYY/MM/DD» یا هر رشته‌ی دیگر) را به «۲۳ شهریور ۱۴۰۵» تبدیل می‌کند */
-function formatJalaliFromDateInput(dateStr: string | null): string {
-  let d = new Date();
-  if (dateStr) {
-    const parts = dateStr.split(/[/\-T]/).map((p) => parseInt(p, 10));
-    if (parts.length >= 3 && parts.every((p) => Number.isFinite(p))) {
-      const candidate = new Date(parts[0], parts[1] - 1, parts[2]);
-      if (!Number.isNaN(candidate.getTime())) d = candidate;
-    }
-  }
-  const [jy, jm, jd] = gregorianToJalali(d.getFullYear(), d.getMonth() + 1, d.getDate());
-  return `${jd} ${JALALI_MONTH_NAMES[jm - 1]} ${jy}`;
 }
 
 /** پیام وضعیت را با گره‌های متنی امن می‌سازد (بدون innerHTML، بدون ریسک تزریق) */
@@ -542,12 +496,7 @@ async function loadRate(els: Elements): Promise<void> {
   if (result) {
     applyRate(result.rate, els);
     els.rateStatus.classList.remove("is-error");
-    const dateLabel = formatJalaliFromDateInput(result.date);
-    setStatusMessage(
-      els.rateStatus,
-      "به‌روزرسانی:",
-      result.sourceLabel ? `${dateLabel} (${result.sourceLabel})` : dateLabel
-    );
+    setStatusMessage(els.rateStatus, "نرخ لحظه‌ای دلار دریافت شد", null);
   } else {
     applyRate(FALLBACK_RATE, els);
     els.rateStatus.classList.add("is-error");
