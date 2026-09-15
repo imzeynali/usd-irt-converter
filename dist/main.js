@@ -269,57 +269,38 @@ function recalcFromAmount(source, els) {
     otherInput.value = formatAmount(displayValueOf(otherCode));
     renderSummary(els);
 }
-/** رشته‌ی تاریخ گرگوری (میلادی) با صفر ابتدایی، مثلاً «2026/09/13» */
-function gregorianDateString(date) {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const d = String(date.getDate()).padStart(2, "0");
-    return `${y}/${m}/${d}`;
-}
 /**
- * منبع اول (اولویت اصلی): آخرین معامله‌ی جفت‌ارز USDT/IRT در صرافی تبدیل
- * (tabdeal.org، همان صفحه‌ی convert/usd-irr). چون تتر (USDT) عملاً معادل
- * دلار است، نرخش نزدیک‌ترین و لحظه‌ای‌ترین نماینده‌ی نرخ آزاد دلار به
- * تومان است. اندپوینت عمومی و بدون نیاز به کلید است.
+ * صرافی نوبیتکس (nobitex.ir)، بزرگ‌ترین صرافی ارز دیجیتال ایران، یک API
+ * عمومی و مستند و بدون نیاز به کلید برای قیمت لحظه‌ای جفت‌ارزها دارد.
+ * از قیمت لحظه‌ای «تتر» (USDT) به ریال استفاده می‌کنیم، چون تتر پرمعامله‌ترین
+ * و لحظه‌ای‌ترین پل بین تومان و دلار در بازار ایران است.
+ *
+ * نکته: نوبیتکس قیمت‌ها را به «ریال» برمی‌گرداند، پس برای تبدیل به تومان
+ * تقسیم بر ۱۰ لازم است.
  */
-async function fetchFromTabdeal() {
-    const url = "https://api1.tabdeal.org/r/api/v1/trades?symbol=USDTIRT&limit=1";
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    try {
-        const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
-        if (!response.ok)
-            return null;
-        const data = (await response.json());
-        const latest = Array.isArray(data) ? data[0] : null;
-        const price = (latest === null || latest === void 0 ? void 0 : latest.price) ? Number(latest.price) : NaN;
-        if (!Number.isFinite(price) || price <= 0)
-            return null;
-        const date = (latest === null || latest === void 0 ? void 0 : latest.time) ? new Date(latest.time).toISOString() : null;
-        return { rate: price, date, sourceLabel: null };
-    }
-    catch {
-        return null;
-    }
-    finally {
-        clearTimeout(timeout);
-    }
-}
-/** منبع دوم: rate-json/Tomanify (بازار آزاد ایران، بدون نیاز به کلید) */
-async function fetchFromTomanify() {
+async function fetchUsdtToTomanFromNobitex() {
     var _a, _b;
-    const url = "https://raw.githubusercontent.com/rate-json/default/main/data.json";
+    const url = "https://api.nobitex.ir/market/stats";
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-        const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ srcCurrency: "usdt", dstCurrency: "rls" }),
+            signal: controller.signal,
+            cache: "no-store",
+        });
         if (!response.ok)
             return null;
         const data = (await response.json());
-        const usd = (_a = data.values) === null || _a === void 0 ? void 0 : _a.USD;
-        if (typeof usd !== "number" || !Number.isFinite(usd) || usd <= 0)
+        if (data.status !== "ok")
             return null;
-        return { rate: usd, date: (_b = data.generated_by_tomanify_at) !== null && _b !== void 0 ? _b : null, sourceLabel: null };
+        const latestRaw = (_b = (_a = data.stats) === null || _a === void 0 ? void 0 : _a["usdt-rls"]) === null || _b === void 0 ? void 0 : _b.latest;
+        const usdtRial = typeof latestRaw === "string" ? Number(latestRaw) : latestRaw;
+        if (!Number.isFinite(usdtRial) || !usdtRial || usdtRial <= 0)
+            return null;
+        return usdtRial / 10; // ریال → تومان
     }
     catch {
         return null;
@@ -329,48 +310,27 @@ async function fetchFromTomanify() {
     }
 }
 /**
- * منبع سوم (پشتیبان نهایی): آرشیو نرخ ریال ایران (برگرفته از bonbast.com، به‌روزشونده
- * روزانه با GitHub Actions). امروز معمولاً تا فردا صبح منتشر نمی‌شود، بنابراین
- * چند روز اخیر را هم امتحان می‌کنیم تا جدیدترین روزِ موجود پیدا شود.
+ * دلار نقدیِ بازار آزاد معمولاً کمی از تتر گران‌تر معامله می‌شود (تتر
+ * دیجیتال و در دسترس‌تر است؛ اسکناس فیزیکی دلار به‌خاطر کمیابی و تقاضای
+ * بیشتر، معمولاً چند درصد گران‌تر می‌ماند). این عدد یک درصدِ قابل‌تنظیم
+ * برای همان اختلاف است — اگر با نرخ واقعی بازار فاصله داشت، کافی است
+ * همین مقدار را عوض کنی.
  */
-async function fetchFromRialArchive() {
-    var _a;
-    const today = new Date();
-    for (let offset = 0; offset < 4; offset++) {
-        const day = new Date(today);
-        day.setDate(day.getDate() - offset);
-        const dateStr = gregorianDateString(day);
-        const url = `https://raw.githubusercontent.com/SamadiPour/rial-exchange-rates-archive/main/gregorian/${dateStr}`;
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
-        try {
-            const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
-            if (!response.ok)
-                continue;
-            const data = (await response.json());
-            const sell = (_a = data.usd) === null || _a === void 0 ? void 0 : _a.sell;
-            if (typeof sell !== "number" || !Number.isFinite(sell) || sell <= 0)
-                continue;
-            return { rate: sell, date: dateStr, sourceLabel: "منبع پشتیبان" };
-        }
-        catch {
-            continue;
-        }
-        finally {
-            clearTimeout(timeout);
-        }
-    }
-    return null;
+const USD_PREMIUM_OVER_USDT = 0.015; // ۱.۵٪
+/** نرخ لحظه‌ای دلار را از روی نرخ لحظه‌ای تتر (نوبیتکس) به‌علاوه‌ی درصد اختلاف بالا حساب می‌کند */
+async function fetchFromNobitexUsdt() {
+    const usdtToman = await fetchUsdtToTomanFromNobitex();
+    if (usdtToman === null)
+        return null;
+    const usdToman = usdtToman * (1 + USD_PREMIUM_OVER_USDT);
+    return { rate: usdToman, date: null, sourceLabel: null };
 }
 /**
- * منابع نرخ آزاد دلار به تومان، به‌ترتیب اولویت. هرکدام شکست بخورد
- * (خطای شبکه، timeout، پاسخ نامعتبر) به‌صورت خودکار سراغ منبع بعدی می‌رویم.
+ * تنها منبع نرخ: قیمت لحظه‌ای تتر از نوبیتکس، به‌علاوه‌ی محاسبه‌ی ریاضیِ
+ * اختلاف با دلار نقدی (بالا). اگر این منبع در دسترس نبود (قطعی شبکه، مسدود
+ * بودن CORS و غیره)، به نرخ تقریبی آفلاین برمی‌گردیم.
  */
-const RATE_SOURCES = [
-    fetchFromTabdeal,
-    fetchFromTomanify,
-    fetchFromRialArchive,
-];
+const RATE_SOURCES = [fetchFromNobitexUsdt];
 /** پس از مشخص‌شدن نرخ (واقعی یا جایگزین)، مقادیر اولیه و کل رابط کاربری را می‌سازد */
 function applyRate(rate, els) {
     state.tomanPerUsd = rate;
