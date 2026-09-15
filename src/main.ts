@@ -175,6 +175,7 @@ function formatCompactSmall(value: number, significantDigits = 4): string {
 }
 
 interface Elements {
+  todayDate: HTMLElement;
   rateStatus: HTMLElement;
   refreshBtn: HTMLButtonElement;
   limitHint: HTMLElement;
@@ -202,6 +203,7 @@ function getElements(): Elements {
   };
 
   return {
+    todayDate: byId("todayDate"),
     rateStatus: byId("rateStatus"),
     refreshBtn: byId("refreshBtn"),
     limitHint: byId("limitHint"),
@@ -549,8 +551,33 @@ function toggleRialMode(els: Elements): void {
   renderAll(els);
 }
 
+/**
+ * تاریخ امروز را به شمسی (جلالی) برمی‌گرداند، مثلاً «۲۴ شهریور ۱۴۰۵».
+ * به‌جای پیاده‌سازی دستیِ الگوریتم تبدیل تقویم، از قابلیت تقویم فارسیِ
+ * built-in مرورگر (Intl) استفاده می‌شود که دقیق‌تر و ساده‌تر است.
+ */
+function todayJalaliLabel(): string {
+  try {
+    const formatter = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+    return formatter.format(new Date());
+  } catch {
+    return "";
+  }
+}
+
+function renderTodayDate(els: Elements): void {
+  const label = todayJalaliLabel();
+  els.todayDate.textContent = label || "—";
+}
+
 function init(): void {
   const els = getElements();
+
+  renderTodayDate(els);
 
   // تا رسیدن نرخ، فیلد دلار و دکمه‌ی سواپ غیرفعال هستند تا محاسبه‌ی نادرست
   // نمایش داده نشود

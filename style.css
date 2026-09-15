@@ -170,6 +170,22 @@ body {
 
 /* ---------------- rate status ---------------- */
 
+.today-date-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.calendar-icon {
+  flex-shrink: 0;
+  color: var(--teal);
+}
+
 .rate-status-card {
   display: flex;
   align-items: center;
