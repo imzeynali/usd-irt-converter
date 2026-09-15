@@ -351,6 +351,78 @@ function recalcFromAmount(source: "top" | "bottom", els: Elements): void {
 }
 
 /**
+ * منبع اول (اصلی): وب‌سرویس رسمی و مستندِ BrsApi.ir برای قیمت لحظه‌ای دلار
+ * (بازار آزاد ایران، به همراه کلید اختصاصی کاربر). چون این API خودش قیمت
+ * دلار را مستقیماً می‌دهد (نه فقط تتر)، نیازی به هیچ محاسبه‌ی تقریبی نیست.
+ *
+ * نکته‌ی امنیتی: چون این یک اپ کاملاً سمت کاربر (بدون بک‌اند) است، این
+ * کلید در کد نهاییِ مرورگر قابل مشاهده خواهد بود (با «مشاهده‌ی کد صفحه»).
+ * برای یک ابزار شخصی/کوچک معمولاً مشکلی ایجاد نمی‌کند، اما اگر روزی این
+ * صفحه ترافیک زیادی گرفت، بهتر است سهمیه‌ی رایگان (۱۵۰۰ ریکوئست در روز)
+ * را زیر نظر داشته باشی یا کلید را پشت یک بک‌اند کوچک مخفی کنی.
+ *
+ * نکته‌ی User-Agent: هشدار BrsApi درباره‌ی User-Agent مربوط به اسکریپت‌های
+ * سمت سرور (پایتون، Go و غیره) است. مرورگر خودش همیشه یک User-Agent واقعی
+ * (کروم/فایرفاکس/...) می‌فرستد و جاوااسکریپت اصلاً اجازه‌ی override کردن
+ * این هدر را ندارد، پس این هشدار برای این اپ اصلاً موضوعیت ندارد.
+ */
+const BRSAPI_KEY = "BQE9a9H9L4urY4HNMXCT72rpGcFkkKhD";
+
+/** به‌صورت بازگشتی در ساختار JSON دنبال آیتمی با symbol برابر «USD» می‌گردد */
+function findUsdItem(data: unknown): { price: number; unit: string } | null {
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const found = findUsdItem(item);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  if (data && typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+
+    if (obj.symbol === "USD" && "price" in obj) {
+      const priceRaw = obj.price;
+      const price = typeof priceRaw === "string" ? Number(priceRaw) : (priceRaw as number);
+      const unit = typeof obj.unit === "string" ? obj.unit : "";
+      if (Number.isFinite(price) && price > 0) return { price, unit };
+    }
+
+    for (const key of Object.keys(obj)) {
+      const found = findUsdItem(obj[key]);
+      if (found) return found;
+    }
+  }
+
+  return null;
+}
+
+async function fetchFromBrsApi(): Promise<RateApiResult | null> {
+  const url = `https://api.brsapi.ir/Market/Gold_Currency.php?key=${BRSAPI_KEY}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
+    if (!response.ok) return null;
+
+    const data: unknown = await response.json();
+    const usd = findUsdItem(data);
+    if (!usd) return null;
+
+    // این API بسته به آیتم، قیمت را به «تومان» یا «ریال» برمی‌گرداند
+    const isRial = usd.unit.includes("ریال");
+    const toman = isRial ? usd.price / 10 : usd.price;
+
+    return { rate: toman, date: null, sourceLabel: null };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
  * صرافی نوبیتکس (nobitex.ir)، بزرگ‌ترین صرافی ارز دیجیتال ایران، یک API
  * عمومی و مستند و بدون نیاز به کلید برای قیمت لحظه‌ای جفت‌ارزها دارد.
  * از قیمت لحظه‌ای «تتر» (USDT) به ریال استفاده می‌کنیم، چون تتر پرمعامله‌ترین
@@ -411,11 +483,11 @@ async function fetchFromNobitexUsdt(): Promise<RateApiResult | null> {
 }
 
 /**
- * تنها منبع نرخ: قیمت لحظه‌ای تتر از نوبیتکس، به‌علاوه‌ی محاسبه‌ی ریاضیِ
- * اختلاف با دلار نقدی (بالا). اگر این منبع در دسترس نبود (قطعی شبکه، مسدود
- * بودن CORS و غیره)، به نرخ تقریبی آفلاین برمی‌گردیم.
+ * ترتیب منابع نرخ: اول وب‌سرویس مستندِ BrsApi (که کلید کاربر را دارد)، و
+ * اگر آن در دسترس نبود (قطعی شبکه، اتمام سهمیه‌ی روزانه و غیره)، به‌صورت
+ * خودکار سراغ محاسبه از روی قیمت تتر نوبیتکس می‌رویم.
  */
-const RATE_SOURCES: Array<() => Promise<RateApiResult | null>> = [fetchFromNobitexUsdt];
+const RATE_SOURCES: Array<() => Promise<RateApiResult | null>> = [fetchFromBrsApi, fetchFromNobitexUsdt];
 
 /** پس از مشخص‌شدن نرخ (واقعی یا جایگزین)، مقادیر اولیه و کل رابط کاربری را می‌سازد */
 function applyRate(rate: number, els: Elements): void {
